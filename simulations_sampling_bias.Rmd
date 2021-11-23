@@ -1,0 +1,425 @@
+---
+title: "Method comparison (simulation)"
+vignette: >
+  %\VignetteIndexEntry{Introduction}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=7,
+                      echo=TRUE, warning=FALSE, message=FALSE,
+                      tidy=TRUE, collapse = TRUE, comment = "#>")
+```
+
+```{r setup}
+library(panplotter)
+library(tidyverse)
+library(data.table)
+library(ape)
+library(ggthemes)
+```
+
+## Simulation
+
+Simulate pangenome evolution with sampling error rate.
+
+
+### Simulate sampling bias
+
+```{r}
+set.seed(12345)
+
+nreps <- 5
+sim_bias <- map(1:nreps, ~ {
+  print(.x)
+  tsim <- simulate_pan(rate = 1e-3, 
+                       mean_trans_size = 1,
+                       fn_error_rate=0, 
+                       fp_error_rate=0,
+                       ngenomes = 200)
+  size <- 0
+  i <- 1
+  subset <- tsim
+  nodes <- sample(tsim$tree$Nnode+2:tsim$tree$Nnode)
+  while((size<=20) || (size>100)){
+    n <- nodes[[i]]
+    subset$tree <- ape::extract.clade(tsim$tree, n)
+    size <- length(subset$tree$tip.label)
+    i <- i+1
+  }
+  
+  subset$pa <- subset$pa[rownames(subset$pa) %in% subset$tree$tip.label,]
+  subset$pa <- subset$pa[,colSums(subset$pa)>0]
+  
+  return(list(full=tsim,
+       subset=subset))
+})
+
+names(sim_bias) <- 1:nreps
+```
+
+Create the necessary input files and run each algorithm
+
+#### panicmage
+
+set up input data
+
+```{r}
+imap(sim_bias, function (rep, i) {
+  imap(rep, ~{
+    ape::write.tree(.x$tree, 
+                  file = paste(c("./data/sampling_bias/panicmage/", nrow(.x$pa), "_bias_", .y,'_rep_',i, '.tree'), 
+                               collapse = ''))
+    gc <- table(factor(colSums(.x$pa), levels = 1:nrow(.x$pa)))
+    writeLines(paste(gc, collapse = ' '), 
+               paste(c("./data/sampling_bias/panicmage/", nrow(.x$pa), "_bias_", .y,'_rep_',i, '.txt'), 
+                               collapse = ''))
+  })
+})
+```
+
+run panicmage
+
+```
+for f in ./data/sampling_bias/panicmage/*.tree
+do
+prefix="${f%.*}"
+num=$(basename $f)
+num="$(cut -d'_' -f1 <<<"$num")"
+echo $prefix
+~/Documents/panicmage/panicmage ${prefix}.tree ${prefix}.txt $num -n > ${prefix}_results.txt
+done
+```
+
+load results
+
+```{r}
+resfiles <- Sys.glob("./data/sampling_bias/panicmage/*_results.txt")
+
+panicmage_results <- map_dfr(resfiles, ~{
+  print(.x)
+  l <- read_lines(.x)  
+  i <- which(grepl('Some characteristics.*',l))
+  params <- as.numeric(gsub('.*= ', '', unlist(str_split(l[[i+1]], ' \t '))))
+  tibble(
+    set = gsub('_rep.*', '', gsub('.*bias_','',.x)),
+    rep = gsub('_results.*', '', gsub('.*rep_','',.x)),
+    theta = params[[1]],
+    tho = params[[2]],
+    core = params[[3]]
+  )
+})
+
+
+
+pdf <- panicmage_results %>% 
+  pivot_longer(cols = colnames(panicmage_results)[3:5])
+
+ggplot(pdf, aes(x=set, y=value)) +
+  geom_point() +
+  facet_wrap(~name, scales = 'free_y')
+```
+
+#### Collins et al.
+
+We first need to convert the newick files into 'tree table' format.
+
+```
+for f in ./data/sampling_bias/panicmage/*.tree
+do
+prefix=$(basename $f)
+prefix="${prefix%.*}"
+echo $prefix
+perl ~/Documents/pangenome/tre2table.pl $f > ./data/sampling_bias/collins/${prefix}.txt
+done
+```
+
+We can now run the scripts from Collins et al., 2012.
+
+```{r}
+source("./scripts/f-pangenome.R")
+
+#coalescent
+mymaxit <- 10000
+myreltol <- 1e-6
+mymodel <- "coalescent.spec" #use the coalescent tree w/G(k)
+myfitting <- "chi2" #fit it using this error function
+constr <- 1 # G0 constrained to the mean genome size during fitting
+mymethod <- "Nelder"
+    
+collins_results <- imap_dfr(sim_bias, function (rep, i) {
+  imap_dfr(rep, ~{
+    mat <- t(.x$pa)
+    ng <- nrow(.x$pa)
+    G0 <- mean(colSums(mat>0)) # mean genome size measured in gene families
+    f <- Sys.glob(paste(c("./data/sampling_bias/collins/*bias_", .y,'_rep_',i, '.txt'), 
+                               collapse = ''))
+    print(f)
+    treetable <- read.table(f, sep="\t", row.names=1)
+    colnames(treetable) <- c("desc_a","desc_b","dist")
+    #calculate gene family frequency spectrum
+    Gk <- f.getspectrum(mat)
+    #set initial parameters and recursively optimize
+    opt.spec.cde <- f.recurse(c(1,100),r.data=Gk, r.genomesize = G0, r.ng = ng)
+    # get optimized parameters, calculate constrained parameter
+    params.spec.cde <- c(opt.spec.cde$par[1],opt.spec.cde$par[1]*(G0-opt.spec.cde$par[2]),opt.spec.cde$par[2])
+    #set initial parameters and recursively optimize
+    pinitial.spec.c2de <- c(params.spec.cde[1]/10,params.spec.cde[2]/100,params.spec.cde[3],params.spec.cde[1]*10000)
+    opt.spec.c2de <- f.recurse(pinitial.spec.c2de,r.data=Gk,r.genomesize = G0, r.ng = ng)
+
+    # get optimized parameters, calculate constrained parameter
+    params.spec.c2de <- c(opt.spec.c2de$par,opt.spec.c2de$par[4]*(
+      G0-opt.spec.c2de$par[2]/opt.spec.c2de$par[1]-opt.spec.c2de$par[3]))
+    print(params.spec.c2de)
+    spec.c2de <- f.coalescent.spec(params.spec.c2de,ng)
+    
+    #summarise paramters
+    return(tibble(
+      set = .y,
+      rep = i,
+      Gess=params.spec.c2de[3],
+      theta1 = params.spec.c2de[2],
+      rho1 = params.spec.c2de[1],
+      theta2 = params.spec.c2de[5],
+      rho2 = params.spec.c2de[4],
+      fslow = params.spec.c2de[2]/params.spec.c2de[1]/G0,
+      ffast = params.spec.c2de[5]/params.spec.c2de[4]/G0,
+      fess = params.spec.c2de[3]/G0,
+      Gnew100 = f.coalescent(params.spec.c2de,100)$pan[100]-f.coalescent(params.spec.c2de,100)$pan[99],
+      Gnew1000 = f.coalescent(params.spec.c2de,1000)$pan[1000]-f.coalescent(params.spec.c2de,1000)$pan[999],
+      Gcore100 = f.coalescent(params.spec.c2de,100)$core[100],
+      Gcore1000 = f.coalescent(params.spec.c2de,1000)$core[1000],
+      Gpan100 = f.coalescent(params.spec.c2de,100)$pan[100],
+      Gpan1000 = f.coalescent(params.spec.c2de,1000)$pan[1000]
+    ))
+  })
+})
+
+pdf <- collins_results[,1:10] %>% 
+  pivot_longer(cols = colnames(collins_results)[3:10])
+
+ggplot(pdf, aes(x=set, y=value)) +
+  geom_point() +
+  facet_wrap(~name, scales = 'free_y')
+```
+
+
+#### Finitely Many Genes model
+
+Here we make use of the implementation of the FMG model as described in Zamani-Dahaj et al., 2016 and implemented in the Panaroo package.
+
+```{r}
+imap(sim_bias, function (rep, i) {
+  imap(rep, ~{
+    ape::write.tree(.x$tree, 
+                  file = paste(c("./data/sampling_bias/zamani-dahaj/bias_", .y,'_rep_',i, '.tree'), 
+                               collapse = ''))
+    tb <- as_tibble(t(.x$pa)) %>% 
+                      add_column(gene=colnames(.x$pa),  .before = 1)
+    write.table(tb, sep = '\t', quote = FALSE, row.names = FALSE,
+                file = paste(c("./data/sampling_bias/zamani-dahaj/bias_", .y,'_rep_',i, '_pa.txt'), 
+                               collapse = ''))
+  })
+})
+```
+
+
+```
+for f in ./data/sampling_bias/zamani-dahaj/*.tree
+do
+prefix=$(basename $f)
+prefix="${prefix%.*}"
+echo $prefix
+python ~/Documents/panaroo/panaroo-estimate-fmg.py -o ./data/sampling_bias/zamani-dahaj/${prefix}.txt --pa ./data/sampling_bias/zamani-dahaj/${prefix}_pa.txt --tree $f
+done
+```
+
+Load results
+
+```{r}
+resfiles <- Sys.glob("./data/sampling_bias/zamani-dahaj/bias_*[0-9].txt")
+
+zamani_results <- map_dfr(resfiles, ~{
+  df <- fread(.x, skip = 4, header = FALSE, 
+              col.names = c('parameter','estimate','NA1','NA2'))[,1:2] %>% 
+    as_tibble()%>% 
+    add_column(set=gsub('_rep.*', '', gsub('.*bias_','',.x)), .before = 1) %>% 
+    add_column(rep=gsub('\\.txt', '', gsub('.*rep_','',.x)), .before = 1)
+  return(df)
+})
+
+pdf <- zamani_results %>% group_by(set, rep) %>%
+  summarise(
+    parameter=c('u','v'),
+    estimate = c(estimate[which(parameter=='a')]*estimate[which(parameter=='M')],
+                 estimate[which(parameter=='v')])
+  )
+
+ggplot(pdf, aes(x=set, y=estimate)) +
+  geom_point()+
+  facet_wrap(~parameter)
+```
+
+#### Accumulation curves (overlapping)
+
+Accumulation curves do not use a statistical model by are very commonly used. Uncertainty is typically quantified using permutations. Here, we consider two curves to be different if there is no overlap in their curves generated by permutation.
+
+```{r}
+nperm <- 100
+curves <- imap_dfr(sim_bias, function (rep, i) {
+  print(i)
+  return(imap_dfr(rep, ~{
+    .x <- t(.x$pa)
+    plotdf <- purrr::map_dfr(1:nperm, function(i){
+      ppa <- .x[sample(nrow(.x), replace = FALSE), sample(ncol(.x), replace = FALSE)]
+      cumlative <- rowSums(apply(ppa, 1, cumsum)>0)
+      cumlative <- cumlative-cumlative[[1]]
+      df <- tibble::tibble(N = 1:length(cumlative),
+                           naccessory = cumlative,
+                           permutation = i)
+      return(df)
+    }) %>%
+      tibble::add_column(pangenome=.y)
+  
+  plotdf <- plotdf %>%
+    dplyr::group_by(N,pangenome) %>%
+    dplyr::summarise(
+      `accessory size` = mean(naccessory),
+      std = sd(naccessory)
+    ) %>%
+    add_column(rep=i, .before = 1) %>%
+    add_column(set=.y, .before = 1)
+  return(plotdf)
+  }))
+})
+
+curves$group <- paste(curves$set, curves$rep, sep = '_')
+
+ggplot(curves, aes(N, `accessory size`, col=set, fill=set, group=group)) + 
+    geom_ribbon(aes(ymin = `accessory size` - std,
+                    ymax = `accessory size` + std),
+                alpha=0.5, col=NA) + 
+    scale_color_brewer(type = 'qual', palette = 5) +
+    scale_fill_brewer(type = 'qual', palette = 5) +
+    geom_line(size = 1) +
+    theme_bw(base_size = 14) +
+    xlab("Number of genomes") +
+    ylab("Accessory size") +
+    labs(fill='error rate', color='error rate') 
+```
+
+#### Panstripe
+
+```{r}
+pp_results <- imap_dfr(sim_bias, function (rep, i) {
+  return(imap_dfr(rep, ~{
+    twdfit <- panplotter::fit_tweedie(.x$pa,.x$tree, stochastic.mapping = FALSE, nboot = 0)
+    pdf <- twdfit$boot_reps %>%
+      add_column(rep=i, .before = 1) %>%
+      add_column(set=.y, .before = 1)
+  return(pdf)
+  }))
+})
+
+ggplot(pp_results, aes(x=set, y=model.core.estimate, col=rep)) +
+  geom_point() 
+```
+
+####Summary plot
+
+```{r}
+# panicmage
+pannic_res <- panicmage_results %>% 
+  pivot_longer(cols = colnames(panicmage_results)[3:5]) %>%
+  filter(name=='theta')
+pannic_res$value <- c(scale(pannic_res$value))
+pannic_test <- t.test(pannic_res$value[pannic_res$set=='full'],
+        pannic_res$value[pannic_res$set=='subset'], 
+        alternative = 'two.sided')
+pannic_test
+
+#collins
+collins_res <- collins_results[,1:10] %>% 
+  pivot_longer(cols = colnames(collins_results)[3:10]) %>%
+  filter(name=='theta1')
+collins_res$value <- c(scale(collins_res$value))
+collins_test <- t.test(collins_res$value[collins_res$set=='full'],
+        collins_res$value[collins_res$set=='subset'], 
+        alternative = 'two.sided')
+collins_test
+
+#Zamani-Dahaj
+zamani_res <- zamani_results %>%
+  filter(parameter=='v')
+zamani_res$estimate <- c(scale(zamani_res$estimate))
+zamani_test <- t.test(zamani_res$estimate[zamani_res$set=='full'],
+        zamani_res$estimate[zamani_res$set=='subset'], 
+        alternative = 'two.sided')
+zamani_test
+
+#accumulation curves
+curves_res <- map_dfr(split(curves %>% filter(N>1), curves$N), ~{
+  .x$value = c(scale(.x$`accessory size`))
+  return(.x)
+})
+  
+curves_res <- curves_res %>% group_by(N, rep) %>%
+  summarise(
+    subset=value[set=='subset'],
+    full=value[set=='full']
+  )
+
+curve_test <- t.test(curves_res$subset, 
+       curves_res$full, 
+       paired = TRUE, alternative = "two.sided")
+curve_test
+
+#panstripe
+pp_results$value <- scale(pp_results$model.core.estimate)
+panstripe_test <- t.test(pp_results$value[pp_results$set=='full'],
+        pp_results$value[pp_results$set=='subset'], 
+        alternative = 'two.sided')
+panstripe_test
+
+
+tests <- tibble(
+  method=c('panicmage','Zamani-Dahaj','Collins','accumulation\ncurve', 'panstripe'),
+  t.statistic=c(pannic_test$statistic, zamani_test$statistic, collins_test$statistic, curve_test$statistic, panstripe_test$statistic),
+  p.value=c(pannic_test$p.value, zamani_test$p.value, collins_test$p.value, curve_test$p.value, panstripe_test$p.value)
+)
+
+curves_res_subset <- curves_res %>% filter(N==20)
+pdf <- tibble(
+  values = c(pp_results$value, pannic_res$value, zamani_res$estimate, collins_res$value, 
+             curves_res_subset$subset, curves_res_subset$full),
+  set = c(pp_results$set, pannic_res$set, zamani_res$set, collins_res$set,
+          rep(c('full','subset'), each=nrow(curves_res_subset))),
+  method = rep(c('panstripe','panicmage','Zamani-Dahaj','Collins','accumulation\ncurve'), 
+               c(nrow(pp_results), nrow(pannic_res), nrow(zamani_res), nrow(collins_res), 2*nrow(curves_res_subset)))
+)
+
+pdf$method <- factor(pdf$method, levels=c('panstripe','Zamani-Dahaj','Collins','panicmage','accumulation\ncurve'))
+
+
+pdf$is.sig <- ifelse(pdf$method %in% tests$method[tests$p.value<0.05],
+                     'significant', 'not significant')
+
+ggplot(pdf, aes(x=set, y=values, col=is.sig)) +
+  geom_boxplot(outlier.colour = NA, position = position_dodge(width = 0.8)) +
+  geom_point(size=2, position = position_dodge(width = 0.8)) +
+  theme_clean(base_size = 20) +
+  facet_wrap(~method, scales = 'free_x', nrow = 1) +
+  scale_color_manual(values = c('#4d4d4d', '#b2182b')) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        axis.title.x=element_blank()) +
+  # scale_alpha_discrete(guide = 'none') +
+  ylab('estimated parameter value (scaled)') +
+  labs(color='')
+
+ggsave('./figures/simulation_sampling_bias_summary.png', width = 15, height = 7)
+ggsave('./figures/simulation_sampling_bias_summary.pdf', width = 15, height = 7)
+```
