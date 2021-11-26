@@ -15,8 +15,62 @@ knitr::opts_chunk$set(fig.width=12, fig.height=7,
 ```
 
 ```{r setup}
-library(panplotter)
+library(panstripe)
 library(tidyverse)
 library(data.table)
 library(ape)
+library(ggthemes)
+```
+
+```{r}
+pa <- fread("./data/mtb/Mtb_panaroo_gene_presence_absence.csv") %>% as_tibble()
+tree <- ape::read.tree("./data/mtb/Mtb_alignment.fasta.treefile")
+tree$tip.label <- colnames(pa)[15:(15+length(tree$tip.label)-1)]
+pa <- t(data.matrix(pa[,15:(15+length(tree$tip.label)-1)]!=''))*1
+```
+
+```{r}
+rpa <- fread("./data/mtb/Mtb_roary_gene_presence_absence.csv") %>% as_tibble()
+rpa <- t(data.matrix(rpa[,15:ncol(rpa)]!=''))
+rpa <- rpa[rownames(rpa) %in% rownames(pa),]
+```
+
+```{r}
+pp <- plot_acc(list(roary=rpa, panaroo=pa)) 
+
+pp +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        axis.title.x=element_blank()) 
+ggsave("./figures/mtb_accumulation_curve_panaroo_roary.png", width = 10, height = 7)
+ggsave("./figures/mtb_accumulation_curve_panaroo_roary.pdf", width = 10, height = 7)
+```
+
+```{r}
+res_panaroo <- fit_tweedie(pa, tree)
+res_roary <- fit_tweedie(rpa, tree)
+```
+
+```{r}
+pp <- plot_pangenome_fits(list(panaroo=res_panaroo, roary=res_roary))
+
+pp +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        axis.title.x=element_blank())
+
+ggsave("./figures/mtb_panstripe_panaroo_roary.png", width = 10, height = 7)
+ggsave("./figures/mtb_panstripe_panaroo_roary.pdf", width = 10, height = 7)
+```
+
+```{r}
+res_panaroo$model_fit
+res_roary$model_fit
+```
+
+```{r}
+comp <- compare_pangenomes(res_panaroo, res_roary, intercept = FALSE)
+comp
 ```

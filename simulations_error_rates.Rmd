@@ -1,5 +1,5 @@
 ---
-title: "Method comparison (simulation)"
+title: "Method comparison - simulated error rates"
 vignette: >
   %\VignetteIndexEntry{Introduction}
   %\VignetteEncoding{UTF-8}
@@ -51,7 +51,7 @@ Create the necessary input files and run each algorithm
 
 set up input data
 
-```{r}
+```{r, message=FALSE, echo = TRUE, results = 'hide'}
 imap(sim_error, function (rep, i) {
   imap(rep, ~{
     ape::write.tree(.x$tree, 
@@ -121,7 +121,7 @@ done
 
 We can now run the scripts from Collins et al., 2012.
 
-```{r}
+```{r, message=FALSE, echo = TRUE, results = 'hide'}
 source("./scripts/f-pangenome.R")
 
 #coalescent
@@ -157,7 +157,7 @@ collins_results <- imap_dfr(sim_error, function (rep, i) {
     print(params.spec.c2de)
     spec.c2de <- f.coalescent.spec(params.spec.c2de,ng)
     
-    #summarise paramters
+    #summarize paramters
     return(tibble(
       error_rate = .y,
       rep = i,
@@ -182,7 +182,11 @@ collins_results <- imap_dfr(sim_error, function (rep, i) {
 pdf <- collins_results[,1:10] %>% 
   pivot_longer(cols = colnames(collins_results)[3:10])
 pdf$error_rate <- factor(pdf$error_rate, levels = sort(unique(as.numeric(pdf$error_rate))))
+```
 
+Plot parameter estimates
+
+```{r}
 ggplot(pdf, aes(x=error_rate, y=value)) +
   geom_point() +
   facet_wrap(~name, scales = 'free_y')
@@ -242,7 +246,7 @@ Run CAFE
 
 Here we make use of the implementation of the FMG model as described in Zamani-Dahaj et al., 2016 and implemented in the Panaroo package.
 
-```{r}
+```{r, message=FALSE, echo = TRUE, results = 'hide'}
 imap(sim_error, function (rep, i) {
   imap(rep, ~{
     ape::write.tree(.x$tree, 
@@ -345,12 +349,51 @@ ggplot(curves, aes(N, `accessory size`, col=error_rate, fill=error_rate, group=g
     labs(fill='error rate', color='error rate') 
 ```
 
-#### Panstripe
+
+### Heaps Law approach of Tettlin et al.
 
 ```{r}
+heap_df <- function(pa){
+  cm <- do.call(rbind, map(1:10, ~{
+    ppa <- pa
+    ppa <- ppa[sample(nrow(ppa), replace = FALSE), sample(ncol(ppa), replace = FALSE)]
+    cumlative <- rowSums(apply(t(ppa), 1, cumsum)>0)
+    cumlative <- cumlative-cumlative[[1]]
+    return(cumlative)
+  }))
+  cumulative_median <- apply(cm, 2, median)
+  
+  res <- broom::tidy(lm(nunique ~ logN, tibble(logN = log(1:length(cumulative_median)),
+                                               nunique = log(cumulative_median+0.001))))
+  return(res)
+} 
+
+heap_results <- imap_dfr(sim_error, function (rep, i) {
+  return(imap_dfr(rep, ~{
+    pdf <- heap_df(.x$pa)%>%
+      add_column(rep=i, .before = 1) %>%
+      add_column(error_rate=as.numeric(.y), .before = 1)
+  })
+  )
+  return(pdf)
+})
+
+heap_results$term <- ifelse(heap_results$term=='logN', 'alpha','log(K)')
+heap_results <- heap_results %>% filter(term=='alpha')
+```
+
+```{r}
+heap_results$error_rate <- factor(heap_results$error_rate, levels = sort(unique(heap_results$error_rate)))
+ggplot(heap_results, aes(x=error_rate, y=estimate, col=rep)) +
+  geom_point() 
+```
+
+#### Panstripe
+
+```{r, message=FALSE, echo = TRUE, results = 'hide'}
 pp_results <- imap_dfr(sim_error, function (rep, i) {
   return(imap_dfr(rep, ~{
-    twdfit <- fit_tweedie(.x$pa,.x$tree, nboot = 0)
+    twdfit <- fit_tweedie(.x$pa,.x$tree, nboot = 0, quiet = TRUE)
     pdf <- twdfit$boot_reps %>%
       add_column(rep=i, .before = 1) %>%
       add_column(error_rate=.y, .before = 1)
@@ -359,8 +402,9 @@ pp_results <- imap_dfr(sim_error, function (rep, i) {
 })
 
 pp_results$error_rate <- factor(pp_results$error_rate, levels = sort(unique(as.numeric(pp_results$error_rate))))
+```
 
-
+```{r}
 ggplot(pp_results, aes(x=error_rate, y=model.core.estimate, col=rep)) +
   geom_point() 
 ```
@@ -435,6 +479,20 @@ curve_test <- map_dfr(4:7, ~{
 })
 curve_test
 
+#Heaps
+heap_results$value <- scale(heap_results$estimate)
+heap_results$error_rate <- as.numeric(as.character(heap_results$error_rate))
+heap_test <- do.call(rbind, heap_results %>% 
+  filter(error_rate>0) %>%
+  group_by(error_rate) %>%
+  group_map(~{
+    broom::tidy(t.test(heap_results$value[heap_results$error_rate==0],
+        .x$value, 
+        alternative = 'two.sided')) %>%
+      add_column(error_rate=unique(.x$error_rate), .before = 1)
+  }, .keep = TRUE))
+
+
 #panstripe
 pp_results$value <- scale(pp_results$model.core.estimate)
 pp_results$error_rate <- as.numeric(as.character(pp_results$error_rate))
@@ -450,30 +508,29 @@ panstripe_test <- do.call(rbind, pp_results %>%
 
 panstripe_test
 
-
 tests <- tibble(
-  method=rep(c('panicmage','Zamani-Dahaj','Collins','accumulation\ncurve', 'panstripe'),
-            c(nrow(pannic_test),nrow(zamani_test),nrow(collins_test),nrow(curve_test),nrow(panstripe_test))),
+  method=rep(c('panicmage','Zamani-Dahaj','Collins','accumulation\ncurve', 'Heaps', 'panstripe'),
+            c(nrow(pannic_test),nrow(zamani_test),nrow(collins_test),nrow(curve_test),nrow(heap_test),nrow(panstripe_test))),
   t.statistic=c(pannic_test$statistic, zamani_test$statistic, collins_test$statistic, 
-                curve_test$statistic, panstripe_test$statistic),
+                curve_test$statistic,heap_test$statistic, panstripe_test$statistic),
   p.value=c(pannic_test$p.value, zamani_test$p.value, collins_test$p.value, 
-            curve_test$p.value, panstripe_test$p.value),
+            curve_test$p.value,heap_test$p.value, panstripe_test$p.value),
   error.rate=c(pannic_test$error_rate, zamani_test$error_rate, collins_test$error_rate, 
-               curve_test$error_rate, panstripe_test$error_rate)
+               curve_test$error_rate,heap_test$error_rate, panstripe_test$error_rate)
 )
 
 curves_res_subset <- curves_res %>% filter(N==20)
 pdf <- tibble(
-  values = c(pp_results$value, pannic_res$value, zamani_res$estimate, collins_res$value, 
+  values = c(pp_results$value, pannic_res$value, zamani_res$estimate, collins_res$value, heap_results$value,
              curves_res_subset$`0`, curves_res_subset$`1`, curves_res_subset$`2`, curves_res_subset$`5`, curves_res_subset$`10`),
-  error.rate = c(pp_results$error_rate, pannic_res$error_rate, zamani_res$error_rate, collins_res$error_rate,
+  error.rate = c(pp_results$error_rate, pannic_res$error_rate, zamani_res$error_rate, collins_res$error_rate, heap_results$error_rate,
           rep(c(0,1,2,5,10), each=nrow(curves_res_subset))),
-  method = rep(c('panstripe','panicmage','Zamani-Dahaj','Collins','accumulation\ncurve'), 
-               c(nrow(pp_results), nrow(pannic_res), nrow(zamani_res), nrow(collins_res), 5*nrow(curves_res_subset)))
+  method = rep(c('panstripe','panicmage','Zamani-Dahaj','Collins', 'Heaps', 'accumulation\ncurve'), 
+               c(nrow(pp_results), nrow(pannic_res), nrow(zamani_res), nrow(collins_res), nrow(heap_results), 5*nrow(curves_res_subset)))
 )
 
 pdf$error.rate <- factor(pdf$error.rate, levels = sort(unique(as.numeric(pdf$error.rate))))
-pdf$method <- factor(pdf$method, levels=c('panstripe','Zamani-Dahaj','Collins','panicmage','accumulation\ncurve'))
+pdf$method <- factor(pdf$method, levels=c('panstripe','Zamani-Dahaj','Collins','panicmage','Heaps','accumulation\ncurve'))
 
 
 pdf$is.sig <- ifelse(paste(pdf$method, pdf$error.rate) %in% paste(tests$method, tests$error.rate)[tests$p.value<0.05],
@@ -495,3 +552,7 @@ ggplot(pdf, aes(x=error.rate, y=values, col=is.sig)) +
 ggsave('./figures/simulation_error_rate_summary.png', width = 15, height = 7)
 ggsave('./figures/simulation_error_rate_summary.pdf', width = 15, height = 7)
 ```
+
+
+
+

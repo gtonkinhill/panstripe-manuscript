@@ -1,5 +1,5 @@
 ---
-title: "Method comparison (simulation)"
+title: "Method comparison - simulated sampling bias"
 vignette: >
   %\VignetteIndexEntry{Introduction}
   %\VignetteEncoding{UTF-8}
@@ -15,7 +15,7 @@ knitr::opts_chunk$set(fig.width=12, fig.height=7,
 ```
 
 ```{r setup}
-library(panplotter)
+library(panstripe)
 library(tidyverse)
 library(data.table)
 library(ape)
@@ -67,7 +67,7 @@ Create the necessary input files and run each algorithm
 
 set up input data
 
-```{r}
+```{r, message=FALSE, echo = TRUE, results = 'hide'}
 imap(sim_bias, function (rep, i) {
   imap(rep, ~{
     ape::write.tree(.x$tree, 
@@ -96,7 +96,7 @@ done
 
 load results
 
-```{r}
+```{r, message=FALSE, echo = TRUE, results = 'hide'}
 resfiles <- Sys.glob("./data/sampling_bias/panicmage/*_results.txt")
 
 panicmage_results <- map_dfr(resfiles, ~{
@@ -139,7 +139,7 @@ done
 
 We can now run the scripts from Collins et al., 2012.
 
-```{r}
+```{r, message=FALSE, echo = TRUE, results = 'hide'}
 source("./scripts/f-pangenome.R")
 
 #coalescent
@@ -211,7 +211,7 @@ ggplot(pdf, aes(x=set, y=value)) +
 
 Here we make use of the implementation of the FMG model as described in Zamani-Dahaj et al., 2016 and implemented in the Panaroo package.
 
-```{r}
+```{r, message=FALSE, echo = TRUE, results = 'hide'}
 imap(sim_bias, function (rep, i) {
   imap(rep, ~{
     ape::write.tree(.x$tree, 
@@ -311,24 +311,64 @@ ggplot(curves, aes(N, `accessory size`, col=set, fill=set, group=group)) +
     labs(fill='error rate', color='error rate') 
 ```
 
-#### Panstripe
+### Heaps Law approach of Tettlin et al.
 
 ```{r}
+heap_df <- function(pa){
+  cm <- do.call(rbind, map(1:10, ~{
+    ppa <- pa
+    ppa <- ppa[sample(nrow(ppa), replace = FALSE), sample(ncol(ppa), replace = FALSE)]
+    cumlative <- rowSums(apply(t(ppa), 1, cumsum)>0)
+    cumlative <- cumlative-cumlative[[1]]
+    return(cumlative)
+  }))
+  cumulative_median <- apply(cm, 2, median)
+  
+  res <- broom::tidy(lm(nunique ~ logN, tibble(logN = log(1:length(cumulative_median)),
+                                               nunique = log(cumulative_median+0.001))))
+  return(res)
+} 
+
+heap_results <- imap_dfr(sim_bias, function (rep, i) {
+  return(imap_dfr(rep, ~{
+    pdf <- heap_df(.x$pa)%>%
+      add_column(rep=i, .before = 1) %>%
+      add_column(set=.y, .before = 1)
+  })
+  )
+  return(pdf)
+})
+
+heap_results$term <- ifelse(heap_results$term=='logN', 'alpha','log(K)')
+heap_results <- heap_results %>% filter(term=='alpha')
+```
+
+```{r}
+ggplot(heap_results, aes(x=set, y=estimate, col=rep)) +
+  geom_point() 
+```
+
+
+#### Panstripe
+
+```{r, message=FALSE, echo = TRUE, results = 'hide'}
 pp_results <- imap_dfr(sim_bias, function (rep, i) {
   return(imap_dfr(rep, ~{
-    twdfit <- panplotter::fit_tweedie(.x$pa,.x$tree, stochastic.mapping = FALSE, nboot = 0)
+    twdfit <- fit_tweedie(.x$pa,.x$tree, nboot = 0, quiet = TRUE)
     pdf <- twdfit$boot_reps %>%
       add_column(rep=i, .before = 1) %>%
       add_column(set=.y, .before = 1)
   return(pdf)
   }))
 })
+```
 
+```{r}
 ggplot(pp_results, aes(x=set, y=model.core.estimate, col=rep)) +
   geom_point() 
 ```
 
-####Summary plot
+#### Summary plot
 
 ```{r}
 # panicmage
@@ -377,6 +417,13 @@ curve_test <- t.test(curves_res$subset,
        paired = TRUE, alternative = "two.sided")
 curve_test
 
+#Heaps
+heap_results$value <- scale(heap_results$estimate)
+heap_test <- t.test(heap_results$value[heap_results$set=='full'],
+        heap_results$value[heap_results$set=='subset'], 
+        alternative = 'two.sided')
+heap_test
+
 #panstripe
 pp_results$value <- scale(pp_results$model.core.estimate)
 panstripe_test <- t.test(pp_results$value[pp_results$set=='full'],
@@ -386,22 +433,22 @@ panstripe_test
 
 
 tests <- tibble(
-  method=c('panicmage','Zamani-Dahaj','Collins','accumulation\ncurve', 'panstripe'),
-  t.statistic=c(pannic_test$statistic, zamani_test$statistic, collins_test$statistic, curve_test$statistic, panstripe_test$statistic),
-  p.value=c(pannic_test$p.value, zamani_test$p.value, collins_test$p.value, curve_test$p.value, panstripe_test$p.value)
+  method=c('panicmage','Zamani-Dahaj','Collins', 'Heaps', 'accumulation\ncurve', 'panstripe'),
+  t.statistic=c(pannic_test$statistic, zamani_test$statistic, collins_test$statistic, heap_test$statistic, curve_test$statistic, panstripe_test$statistic),
+  p.value=c(pannic_test$p.value, zamani_test$p.value, collins_test$p.value, heap_test$p.value, curve_test$p.value, panstripe_test$p.value)
 )
 
 curves_res_subset <- curves_res %>% filter(N==20)
 pdf <- tibble(
-  values = c(pp_results$value, pannic_res$value, zamani_res$estimate, collins_res$value, 
+  values = c(pp_results$value, pannic_res$value, zamani_res$estimate, collins_res$value, heap_results$value,
              curves_res_subset$subset, curves_res_subset$full),
-  set = c(pp_results$set, pannic_res$set, zamani_res$set, collins_res$set,
+  set = c(pp_results$set, pannic_res$set, zamani_res$set, collins_res$set, heap_results$set,
           rep(c('full','subset'), each=nrow(curves_res_subset))),
-  method = rep(c('panstripe','panicmage','Zamani-Dahaj','Collins','accumulation\ncurve'), 
-               c(nrow(pp_results), nrow(pannic_res), nrow(zamani_res), nrow(collins_res), 2*nrow(curves_res_subset)))
+  method = rep(c('panstripe','panicmage','Zamani-Dahaj','Collins','Heaps','accumulation\ncurve'), 
+               c(nrow(pp_results), nrow(pannic_res), nrow(zamani_res), nrow(collins_res),  nrow(heap_results), 2*nrow(curves_res_subset)))
 )
 
-pdf$method <- factor(pdf$method, levels=c('panstripe','Zamani-Dahaj','Collins','panicmage','accumulation\ncurve'))
+pdf$method <- factor(pdf$method, levels=c('panstripe','Zamani-Dahaj','Collins', 'panicmage','Heaps', 'accumulation\ncurve'))
 
 
 pdf$is.sig <- ifelse(pdf$method %in% tests$method[tests$p.value<0.05],
