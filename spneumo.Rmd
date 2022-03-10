@@ -1,0 +1,190 @@
+---
+title: "S. pneumoniae"
+vignette: >
+  %\VignetteIndexEntry{Introduction}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=7,
+                      echo=TRUE, warning=FALSE, message=FALSE,
+                      tidy=TRUE, collapse = TRUE, comment = "#>")
+```
+
+```{r setup}
+library(panstripe)
+library(tidyverse)
+library(data.table)
+library(ape)
+library(ggthemes)
+library(ggtree)
+library(ggtreeExtra)
+```
+
+## Load data
+
+```{r}
+rtab_files <- Sys.glob("./data/spneumoniae/*.Rtab")
+pas <- map(rtab_files, read_rtab)
+names(pas) <- gsub('_strict.*', '', gsub('.*/', '', rtab_files))
+
+tree_files <- Sys.glob("./data/spneumoniae/*.tre")
+trees <- map(tree_files, read.tree)
+names(trees) <- gsub('_BD.*', '', gsub('.*GPSC', '', tree_files))
+trees <- trees[names(pas)]
+
+or_data <- fread("./data/spneumoniae/GPSC_OR.csv") %>% as_tibble()
+```
+
+## Plot trees
+
+```{r}
+patchwork::wrap_plots(imap(trees, ~ ggtree(.x)+ ggtree::theme_tree2() + ggtitle(paste('GPSC',.y))))
+```
+
+## Run panstripe
+
+```{r}
+fits <- map2(pas, trees, ~ panstripe(.x, .y, quiet = FALSE, nboot=0))
+saveRDS(fits, file = "./data/spneumo_fits.RDS")
+```
+
+## Plot results
+
+We first plot a standard accumulation curve. This does not account for differences in error rates and the underlying population structure.
+
+```{r}
+# plot_acc(map(clades, ~ .x$pa))
+```
+
+```{r}
+pdf <- plot_pangenome_fits(fits, plot = FALSE)
+# pdf$fit_dat$pangenome <- as.numeric(pdf$fit_dat$pangenome)
+
+pdf <- pdf$fit_dat 
+pdf$logOR <- log(or_data$logOR[match(pdf$pangenome, or_data$GPSC)])
+pdf$pvalue <- or_data$pvalue[match(pdf$pangenome, or_data$GPSC)]
+
+pdf$logOR[is.na(pdf$logOR) | pdf$pvalue<0.05] <- NA
+
+pdf$status <- ifelse(pdf$logOR>0, 'invasive', 'not invasive')
+
+ggplot(pdf %>% filter(core<100) %>% filter(!is.na(logOR)), aes(x=core, y=acc, col=status, group=factor(pangenome))) +
+  geom_line() +
+  scale_y_sqrt() +
+  scale_colour_manual(values = c('#e41a1c', '#377eb8')) +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank()) +
+  theme(panel.border=element_blank(), axis.line=element_line()) +
+  xlab("core branch length (years)") +
+  ylab("estimated gene gain/loss events") +
+  labs(color="")
+
+ggsave("./figures/pneumo_panstripe_fits.pdf", width = 10, height = 7)
+ggsave("./figures/pneumo_panstripe_fits.png", width = 10, height = 7)
+```
+
+
+
+```{r}
+or_data$invasive <- (or_data$pvalue<0.05) & (log(or_data$logOR)>0)
+or_data$GPSC <- as.character(or_data$GPSC)
+lineage_size <- map_dbl(fits, ~ nrow(.x$pa))
+or_data_subset <- or_data[or_data$GPSC %in% names(lineage_size)[lineage_size>=0],]
+# or_data_subset <- or_data_subset[or_data_subset$pvalue<0.1,]
+fit_subset <- fits[names(fits) %in% or_data_subset$GPSC]
+comp <- compare_pangenome_covariates(fit_subset, or_data_subset, keep = 'invasive', nboot = 100)
+comp$summary
+```
+
+```{r}
+pdf <- comp$model$model %>% as_tibble()
+pdf$invasive <- ifelse(pdf$invasive, 'Invasive', 'Not invasive')
+
+ggplot(pdf %>% filter(istip), aes(x=invasive, y=acc, col=invasive)) + 
+  ggbeeswarm::geom_quasirandom(alpha=0.2, width = 0.2) +
+  geom_boxplot(outlier.colour = NA, fill=NA, col='#4d4d4d') +
+  scale_colour_manual(values = c('#e41a1c', '#377eb8')) +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        legend.position = 'none') +
+  theme(panel.border=element_blank(), axis.line=element_line()) +
+  ylab('accessory gene gain/loss events at tip') +
+  xlab('')
+
+ggsave("./figures/pneumo_tip_acc_count_histogram.pdf", width = 10, height = 7)
+ggsave("./figures/pneumo_tip_acc_count_histogram.png", width = 10, height = 7)
+
+
+pdf <- tibble(core_estimate=map_dbl(fit_subset, ~ .x$summary$estimate[.x$summary$term=='core']),
+              invasive=ifelse(or_data_subset$invasive[match(names(fit_subset), or_data_subset$GPSC)], 'Invasive', 'Not Invasive'))
+
+ggplot(pdf, aes(x=invasive, y=core_estimate, colour=invasive)) + 
+  geom_boxplot(outlier.color = NA, fill=NA) +
+  ggbeeswarm::geom_quasirandom(width = 0.2, size=2) +
+  scale_colour_manual(values = c('#e41a1c', '#377eb8')) +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        legend.position = 'none') +
+  theme(panel.border=element_blank(), axis.line=element_line()) +
+  ylab('Estimated core coefficient') +
+  xlab('')
+
+ggsave("./figures/pneumo_core_estimate_boxplot.pdf", width = 10, height = 7)
+ggsave("./figures/pneumo_core_estimate_boxplot.png", width = 10, height = 7)
+```
+
+
+```{r}
+dist_df <- imap_dfr(trees, ~{
+  d <- cophenetic.phylo(.x)
+  d[lower.tri(d, diag = TRUE)] <- NA
+  d <- matrixStats::colMins(d, na.rm = TRUE)
+  tibble(
+    GPSC=.y,
+    distance=d
+  )
+})
+
+dist_df <- dist_df[dist_df$GPSC %in% or_data_subset$GPSC,]
+dist_df$invasive <- or_data_subset$invasive[match(dist_df$GPSC,or_data_subset$GPSC)]
+dist_df$invasive <- ifelse(dist_df$invasive, 'Invasive', 'Not invasive')
+
+ggplot(dist_df %>% filter(distance<50), aes(x=distance, fill=invasive)) +
+  geom_histogram() +
+  facet_wrap(~invasive, ncol = 1, scales = 'free_y') +
+  scale_fill_manual(values = c('#e41a1c', '#377eb8')) +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        legend.position = 'none') +
+  theme(panel.border=element_blank(), axis.line=element_line()) +
+  xlab('distance to nearest neighbour in phylogeny (years)')
+
+ggsave("./figures/GPSC_nn_histogram.pdf", width = 12, height = 7)
+ggsave("./figures/GPSC_nn_histogram.png", width = 12, height = 7)
+```
+
+
+```{r}
+trees_sig <- trees[names(trees) %in% or_data_subset$GPSC]
+
+ggs <- imap(trees_sig, ~{
+  colour <- ifelse(.y %in% or_data_subset$GPSC[or_data_subset$invasive], '#e41a1c', '#377eb8')
+  gg <- ggtree(.x, col=colour) + 
+    ggtree::theme_tree2() +
+    xlim_tree(xlim = 500) +
+    ggtitle(paste('GPSC', .y))
+  return(gg)
+})
+
+patchwork::wrap_plots(ggs)
+ggsave("./figures/GPSC_phylogenies_sigOR.pdf", width = 12, height = 10)
+ggsave("./figures/GPSC_phylogenies_sigOR.png", width = 12, height = 10)
+```

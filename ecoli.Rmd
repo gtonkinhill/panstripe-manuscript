@@ -1,0 +1,216 @@
+---
+title: "E. coli NORM data set"
+vignette: >
+  %\VignetteIndexEntry{Introduction}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=7,
+                      echo=TRUE, warning=FALSE, message=FALSE,
+                      tidy=TRUE, collapse = TRUE, comment = "#>")
+```
+
+```{r setup}
+library(panstripe)
+library(tidyverse)
+library(data.table)
+library(ape)
+library(ggthemes)
+library(ggtree)
+```
+
+## Load data
+
+Load phylogenies and the gene presence/absence matrix from Gladstone et al., 2020.
+
+```{r}
+pa <- read_rtab("./data/ecoli/gene_presence_absence.Rtab")
+rownames(pa) <- gsub('\\.contigs.*', '', gsub('#', '_', rownames(pa)))
+
+tree_files <- Sys.glob("./data/ecoli/clade*.nwk")
+.x <- tree_files[[1]]
+
+clades <- map(tree_files, ~{
+  tr <- read.tree(.x)
+  tr$tip.label <- gsub('_[0-9]+$', "", tr$tip.label)
+  stopifnot(all(tr$tip.label %in% rownames(pa)))
+  tpa <- pa[rownames(pa) %in% tr$tip.label, ]
+  tpa <- tpa[,colSums(tpa)>0]
+
+  return(list(
+    clade = gsub('_.*','',gsub('.*ecoli/', '', .x)),
+    tree = tr,
+    pa = tpa
+  ))
+})
+names(clades) <- map_chr(clades, ~ .x$clade)
+```
+
+## Run panstripe
+
+```{r}
+fits <- imap(clades, ~{
+    panstripe(.x$pa, .x$tree)
+})
+```
+
+## Plot results
+
+First we plot the input phylogenies for each clade.
+
+```{r}
+patchwork::wrap_plots(imap(clades, ~ ggtree(.x$tree) + theme_tree2() + ggtitle(.y)))
+```
+
+We first plot a standard accumulation curve. This does not account for differences in error rates and the underlying population structure. Interestingly without controlling for population structure it would be easy to assume clade B was the most diverse. However, we show below that this is not that case which fits much better with previous phylogenetic analysis of the NORM data set.
+
+```{r}
+plot_acc(map(clades, ~ .x$pa)) +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        axis.title.x=element_blank())
+
+ggsave('./figures/ecoli_accumulation_curves.png', width = 12, height = 7)
+ggsave('./figures/ecoli_accumulation_curves.pdf', width = 12, height = 7)
+```
+
+If we instead plot the panstripe curves we can see that clade B appears to be quite different to the other clades and actually has lower rates of gene gain and loss. This makes sense given it is older and fits with the gain and loss of resistance described in Gladstone et al., 2020.
+
+```{r}
+plot_pangenome_fits(fits, include_data = TRUE, type = 'individual', trim = FALSE, facet = TRUE)
+```
+
+We can confirm this difference by performing pairwise comparisons between the slopes of fitted models. This can be done both for the association with the core branch length and with the tips of the phylogeny. Significant associations with the tips are likely to be driven by both highly mobile elements that do not persist long enough to be observed more than once as well as the effects of annotation errors.
+
+```{r}
+comb <- combinat::combn2(1:length(clades))
+
+comparisons <- map2_dfr(comb[,1], comb[,2], ~{
+  fA <- fits[[.x]]
+  fB <- fits[[.y]]
+  
+  return(compare_pangenomes(fA, fB)$summary %>%
+    add_column(clade1=names(clades)[[.x]]) %>%
+    add_column(clade2=names(clades)[[.y]]))
+})
+```
+
+Look at comparisons of the rate of gene/gain loss at the core genome level
+
+```{r}
+pdf <- comparisons %>% filter(term=='core') %>% arrange(p.value)
+pdf$p.adj <- p.adjust(pdf$p.value, method = 'BH')
+knitr::kable(pdf[,c('clade1','clade2','statistic','p.value','p.adj')])
+```
+
+Look at comparisons of the rate of gene/gain loss at the tips of the phylogenies
+
+```{r}
+pdf <- comparisons %>% filter(term=='istip') %>% arrange(p.value)
+pdf$p.adj <- p.adjust(pdf$p.value, method = 'BH')
+knitr::kable(pdf[,c('clade1','clade2','statistic','p.value','p.adj')])
+```
+
+Look at comparisons of the rate of gene/gain loss at the tips of the phylogenies
+
+```{r}
+pdf <- comparisons %>% filter(term=='istip') %>% arrange(p.value)
+pdf$p.adj <- p.adjust(pdf$p.value, method = 'BH')
+knitr::kable(pdf[,c('clade1','clade2','statistic','p.value','p.adj')])
+```
+
+We can also investigate whether there are differences in the rates of recombination events versus the size of these events between the clades. 
+
+```{r}
+pdf <- comparisons %>% filter(term=='dispersion model') %>% arrange(p.value)
+pdf$p.adj <- p.adjust(pdf$p.value, method = 'BH')
+knitr::kable(pdf[,c('clade1','clade2','statistic','p.value','p.adj')])
+```
+
+
+## Compare with *E. faecalis*
+
+```{r}
+# load efaelcis fits
+efits <- readRDS("./data/efaecalis_fits.RDS")
+
+combined_fits <- c(fits, efits)
+```
+
+```{r}
+
+gg1 <- plot_pangenome_fits(fits, type='cumulative', include_data = TRUE, trim = TRUE, facet = TRUE, color_pallete = 6, text_size = 20) + 
+  scale_y_continuous(limits = c(0,1000)) +
+  scale_x_continuous(limits = c(0,20))
+gg2 <- plot_pangenome_fits(efits, type='cumulative', include_data = TRUE, trim = TRUE, facet = TRUE, color_pallete = 1, text_size = 20) + 
+  scale_y_continuous(limits = c(0,1000)) +
+  scale_x_continuous(limits = c(0,20))
+
+gg1 + gg2 + patchwork::plot_layout(nrow = 1, guides = 'collect')
+
+pdf <- plot_pangenome_fits(combined_fits, type='cumulative', include_data = TRUE, trim = TRUE, facet = TRUE, plot = FALSE)
+pdf$point_data$species <- ifelse(grepl('pp.*', pdf$point_data$pangenome), "E. faecalis", "E. coli")
+pdf$fit_data$species <- ifelse(grepl('pp.*', pdf$fit_data$pangenome), "E. faecalis", "E. coli")
+
+ggplot2::ggplot(pdf$fit_data, ggplot2::aes(x=.data$core, y=.data$acc, colour=.data$pangenome)) + 
+  ggplot2::geom_point(data = pdf$point_data, ggplot2::aes(y=.data$acc, colour=.data$pangenome), alpha=1)+
+  ggplot2::geom_line() +
+  ggplot2::geom_ribbon(ggplot2::aes(ymin=.data$lower, ymax=.data$upper, fill=.data$pangenome), alpha=0.3) +
+  facet_grid(pangenome~species) + 
+  ggplot2::scale_colour_brewer(type = 'qual', palette = 3) +
+  ggplot2::scale_fill_brewer(type = 'qual', palette = 3) +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        axis.title.x=element_blank()) +
+  ggplot2::xlab('core phylogentic branch distance')
+
+ggsave("./figures/ecoli_efaecalis_pangenome_fits.png", width = 9, height = 15)
+ggsave("./figures/ecoli_efaecalis_pangenome_fits.pdf", width = 9, height = 15)
+```
+
+
+```{r}
+comb <- combinat::combn2(1:length(combined_fits))
+
+comparisons <- map2_dfr(comb[,1], comb[,2], ~{
+  fA <- combined_fits[[.x]]
+  fB <- combined_fits[[.y]]
+  
+  return(compare_pangenomes(fA, fB, nboot = 0)$summary %>%
+    add_column(clade1=names(combined_fits)[[.x]]) %>%
+    add_column(clade2=names(combined_fits)[[.y]]))
+})
+
+pdf <- comparisons %>% filter(term=='core') %>% arrange(p.value)
+pdf$p.adj <- p.adjust(pdf$p.value, method = 'BH')
+knitr::kable(pdf[,c('clade1','clade2','estimate','p.value','p.adj')])
+
+
+pdf <- comparisons %>% filter(term=='istip') %>% arrange(p.value)
+pdf$p.adj <- p.adjust(pdf$p.value, method = 'BH')
+knitr::kable(pdf[,c('clade1','clade2','estimate','p.value','p.adj')])
+
+pdf <- comparisons %>% filter(term=='dispersion model') %>% arrange(p.value)
+pdf$p.adj <- p.adjust(pdf$p.value, method = 'BH')
+knitr::kable(pdf[,c('clade1','clade2','estimate','p.value','p.adj')])
+```
+
+## commbined accumulation curve
+
+```{r}
+plot_acc(map(combined_fits, ~ .x$pa), color_pallete = 3) +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        axis.title.x=element_blank())
+
+ggsave('./figures/ecoli_efaecalis_accumulation_curves.png', width = 12, height = 7)
+ggsave('./figures/ecoli_efaecalis_accumulation_curves.pdf', width = 12, height = 7)
+```
+

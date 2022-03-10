@@ -1,0 +1,131 @@
+---
+title: "E. faecalis"
+vignette: >
+  %\VignetteIndexEntry{Introduction}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=7,
+                      echo=TRUE, warning=FALSE, message=FALSE,
+                      tidy=TRUE, collapse = TRUE, comment = "#>")
+```
+
+```{r setup}
+library(panstripe)
+library(tidyverse)
+library(data.table)
+library(ape)
+library(ggthemes)
+library(ggtree)
+library(ggtreeExtra)
+```
+
+## Load data
+
+```{r}
+pa <- read_rtab("./data/efaecalis/Efcs_gene_presence_absence.Rtab")
+rownames(pa) <- gsub('\\.velvet.*', '', rownames(pa))
+
+tree_files <- Sys.glob("./data/efaecalis/*.tre")
+
+clades <- map(tree_files, ~{
+  tree <- read.nexus(.x)
+  tree$tip.label <- gsub('.*/','',gsub('_[0-9]_[0-9]+$','',tree$tip.label))
+  name <- gsub('.*/','',gsub('_.*','',.x))
+  tpa <- pa[rownames(pa) %in% tree$tip.label,]
+  return(list(
+    clade=name,
+    pa=tpa,
+    tree=tree
+  ))
+})
+names(clades) <- map_chr(clades, ~ .x$clade)
+```
+
+## Plot trees
+
+```{r}
+patchwork::wrap_plots(map(clades, ~ ggtree(.x$tree)+ ggtree::theme_tree2() + ggtitle(.x$clade)))
+```
+
+## Run panstripe
+
+```{r}
+fits <- map(clades, ~ panstripe(.x$pa, .x$tree, quiet = FALSE))
+fits$pp18$summary
+fits$pp2$summary
+fits$pp6$summary
+saveRDS(fits, './data/efaecalis_fits.RDS')
+```
+
+## Plot results
+
+We first plot a standard accumulation curve. This does not account for differences in error rates and the underlying population structure.
+
+```{r}
+plot_acc(map(clades, ~ .x$pa)) +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        axis.title.x=element_blank(),
+        panel.spacing = unit(2, "lines"))
+
+ggsave('./figures/efaecalis_pangenome_accumulation_curves.png', width=12, height=7)
+ggsave('./figures/efaecalis_pangenome_accumulation_curves.pdf', width=12, height=7)
+```
+
+```{r}
+plot_pangenome_fits(fits, type = 'cumulative', include_data = TRUE, facet = TRUE) +
+  theme_clean(base_size = 20) +
+  theme(plot.background = element_blank(),
+        legend.background = element_blank(),
+        axis.title.x=element_blank(),
+        panel.spacing = unit(2, "lines"))
+
+ggsave('./figures/efaecalis_pangenome_fits.png', width=12, height=7)
+ggsave('./figures/efaecalis_pangenome_fits.pdf', width=12, height=7)
+```
+
+We can confirm this difference by performing pairwise comparisons between the slopes of fitted models. This can be done both for the association with the core branch length and with the tips of the phylogeny. Significant associations with the tips are likely to be driven by both highly mobile elements that do not persist long enough to be observed more than once as well as the effects of annotation errors.
+
+```{r}
+comb <- combinat::combn2(1:length(clades))
+
+comparisons <- map2_dfr(comb[,1], comb[,2], ~{
+  fA <- fits[[.x]]
+  fB <- fits[[.y]]
+  
+  return(compare_pangenomes(fA, fB, ci_type = 'norm')$summary %>%
+    add_column(clade1=names(clades)[[.x]]) %>%
+    add_column(clade2=names(clades)[[.y]]))
+})
+```
+
+Look at comparisons of the rate of gene/gain loss at the core genome level
+
+```{r}
+pdf <- comparisons %>% filter(term=='core') %>% arrange(p.value)
+pdf$p.adj <- p.adjust(pdf$p.value, method = 'BH')
+knitr::kable(pdf[,c('clade1','clade2','statistic','p.value','p.adj')])
+```
+
+Look at comparisons of error rates
+
+```{r}
+pdf <- comparisons %>% filter(term=='istip') %>% arrange(p.value)
+pdf$p.adj <- p.adjust(pdf$p.value, method = 'BH')
+knitr::kable(pdf[,c('clade1','clade2','statistic','p.value','p.adj')])
+```
+
+Look at comparisons of dispersion
+
+```{r}
+pdf <- comparisons %>% filter(term=='dispersion model') %>% arrange(p.value)
+pdf$p.adj <- p.adjust(pdf$p.value, method = 'BH')
+knitr::kable(pdf[,c('clade1','clade2','statistic','p.value','p.adj')])
+```
+

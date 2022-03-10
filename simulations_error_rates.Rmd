@@ -393,8 +393,8 @@ ggplot(heap_results, aes(x=error_rate, y=estimate, col=rep)) +
 ```{r, message=FALSE, echo = TRUE, results = 'hide'}
 pp_results <- imap_dfr(sim_error, function (rep, i) {
   return(imap_dfr(rep, ~{
-    twdfit <- fit_tweedie(.x$pa,.x$tree, nboot = 0, quiet = TRUE)
-    pdf <- twdfit$boot_reps %>%
+    fit <- panstripe(.x$pa,.x$tree, nboot = 0, quiet = TRUE, family='gaussian')
+    pdf <- fit$summary %>%
       add_column(rep=i, .before = 1) %>%
       add_column(error_rate=.y, .before = 1)
   return(pdf)
@@ -402,10 +402,11 @@ pp_results <- imap_dfr(sim_error, function (rep, i) {
 })
 
 pp_results$error_rate <- factor(pp_results$error_rate, levels = sort(unique(as.numeric(pp_results$error_rate))))
+pp_results <- pp_results %>% filter(term=='core')
 ```
 
 ```{r}
-ggplot(pp_results, aes(x=error_rate, y=model.core.estimate, col=rep)) +
+ggplot(pp_results, aes(x=error_rate, y=estimate, col=rep)) +
   geom_point() 
 ```
 
@@ -416,7 +417,7 @@ ggplot(pp_results, aes(x=error_rate, y=model.core.estimate, col=rep)) +
 pannic_res <- panicmage_results %>% 
   pivot_longer(cols = colnames(panicmage_results)[3:5]) %>%
   filter(name=='theta')
-pannic_res$value <- c(scale(pannic_res$value))
+pannic_res$value <- c(scale(pannic_res$value, scale=FALSE, center=FALSE))
 
 pannic_test <- do.call(rbind, pannic_res %>% 
   filter(error_rate>0) %>%
@@ -433,7 +434,7 @@ pannic_test
 collins_res <- collins_results[,1:10] %>% 
   pivot_longer(cols = colnames(collins_results)[3:10]) %>%
   filter(name=='theta1')
-collins_res$value <- c(scale(collins_res$value))
+collins_res$value <- c(scale(collins_res$value, scale=FALSE, center=FALSE))
 
 collins_test <- do.call(rbind, collins_res %>% 
   filter(error_rate>0) %>%
@@ -449,7 +450,7 @@ collins_test
 #Zamani-Dahaj
 zamani_res <- zamani_results %>%
   filter(parameter=='v')
-zamani_res$estimate <- c(scale(zamani_res$estimate))
+zamani_res$estimate <- c(scale(zamani_res$estimate, scale=FALSE, center=FALSE))
 zamani_res$error_rate <- as.numeric(as.character(zamani_res$error_rate))
 
 zamani_test <- do.call(rbind, zamani_res %>% 
@@ -466,7 +467,7 @@ zamani_test
 #accumulation curves
 curves_res <- curves %>% filter(N>1)
 curves_res <- map_dfr(split(curves_res, curves_res$N), ~{
-  .x$value = c(scale(.x$`accessory size`))
+  .x$value = c(scale(.x$`accessory size`, scale=FALSE, center=FALSE))
   return(.x)
 })
 
@@ -480,7 +481,7 @@ curve_test <- map_dfr(4:7, ~{
 curve_test
 
 #Heaps
-heap_results$value <- scale(heap_results$estimate)
+heap_results$value <- scale(heap_results$estimate, scale=FALSE, center=FALSE)
 heap_results$error_rate <- as.numeric(as.character(heap_results$error_rate))
 heap_test <- do.call(rbind, heap_results %>% 
   filter(error_rate>0) %>%
@@ -494,7 +495,7 @@ heap_test <- do.call(rbind, heap_results %>%
 
 
 #panstripe
-pp_results$value <- scale(pp_results$model.core.estimate)
+pp_results$value <- scale(pp_results$estimate, scale=FALSE, center=FALSE)
 pp_results$error_rate <- as.numeric(as.character(pp_results$error_rate))
 panstripe_test <- do.call(rbind, pp_results %>% 
   filter(error_rate>0) %>%
@@ -540,17 +541,18 @@ ggplot(pdf, aes(x=error.rate, y=values, col=is.sig)) +
   geom_boxplot(outlier.colour = NA, position = position_dodge(width = 0.8)) +
   geom_point(size=2, position = position_dodge(width = 0.8)) +
   theme_clean(base_size = 20) +
-  facet_wrap(~method, scales = 'free_x', nrow = 1) +
+  facet_wrap(~method, scales = 'free', nrow = 1) +
   scale_color_manual(values = c('#4d4d4d', '#b2182b')) +
   theme(plot.background = element_blank(),
         legend.background = element_blank(),
-        axis.title.x=element_blank()) +
+        axis.title.x=element_blank(),
+        panel.spacing = unit(2, "lines")) +
   # scale_alpha_discrete(guide = 'none') +
-  ylab('estimated parameter value (scaled)') +
+  ylab('estimated parameter value') +
   labs(color='')
 
-ggsave('./figures/simulation_error_rate_summary.png', width = 15, height = 7)
-ggsave('./figures/simulation_error_rate_summary.pdf', width = 15, height = 7)
+ggsave('./figures/simulation_error_rate_summary.png', width = 17, height = 7)
+ggsave('./figures/simulation_error_rate_summary.pdf', width = 17, height = 7)
 ```
 
 

@@ -48,14 +48,12 @@ ggsave("./figures/mtb_accumulation_curve_panaroo_roary.pdf", width = 10, height 
 ```
 
 ```{r}
-res_panaroo <- fit_tweedie(pa, tree)
-res_roary <- fit_tweedie(rpa, tree)
+res_panaroo <- panstripe(pa, tree)
+res_roary <- panstripe(rpa, tree)
 ```
 
 ```{r}
-pp <- plot_pangenome_fits(list(panaroo=res_panaroo, roary=res_roary))
-
-pp +
+plot_pangenome_fits(list(panaroo=res_panaroo, roary=res_roary), type = 'individual', include_data = TRUE) +
   theme_clean(base_size = 20) +
   theme(plot.background = element_blank(),
         legend.background = element_blank(),
@@ -66,11 +64,11 @@ ggsave("./figures/mtb_panstripe_panaroo_roary.pdf", width = 10, height = 7)
 ```
 
 ```{r}
-res_panaroo$model_fit
-res_roary$model_fit
+res_panaroo$summary
+res_roary$summary
 ```
 
 ```{r}
-comp <- compare_pangenomes(res_panaroo, res_roary, intercept = FALSE)
-comp
+comp <- compare_pangenomes(res_panaroo, res_roary)
+knitr::kable(comp$summary)
 ```
