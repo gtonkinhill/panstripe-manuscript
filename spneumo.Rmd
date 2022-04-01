@@ -54,41 +54,6 @@ saveRDS(fits, file = "./data/spneumo_fits.RDS")
 
 ## Plot results
 
-We first plot a standard accumulation curve. This does not account for differences in error rates and the underlying population structure.
-
-```{r}
-# plot_acc(map(clades, ~ .x$pa))
-```
-
-```{r}
-pdf <- plot_pangenome_fits(fits, plot = FALSE)
-# pdf$fit_dat$pangenome <- as.numeric(pdf$fit_dat$pangenome)
-
-pdf <- pdf$fit_dat 
-pdf$logOR <- log(or_data$logOR[match(pdf$pangenome, or_data$GPSC)])
-pdf$pvalue <- or_data$pvalue[match(pdf$pangenome, or_data$GPSC)]
-
-pdf$logOR[is.na(pdf$logOR) | pdf$pvalue<0.05] <- NA
-
-pdf$status <- ifelse(pdf$logOR>0, 'invasive', 'not invasive')
-
-ggplot(pdf %>% filter(core<100) %>% filter(!is.na(logOR)), aes(x=core, y=acc, col=status, group=factor(pangenome))) +
-  geom_line() +
-  scale_y_sqrt() +
-  scale_colour_manual(values = c('#e41a1c', '#377eb8')) +
-  theme_clean(base_size = 20) +
-  theme(plot.background = element_blank(),
-        legend.background = element_blank()) +
-  theme(panel.border=element_blank(), axis.line=element_line()) +
-  xlab("core branch length (years)") +
-  ylab("estimated gene gain/loss events") +
-  labs(color="")
-
-ggsave("./figures/pneumo_panstripe_fits.pdf", width = 10, height = 7)
-ggsave("./figures/pneumo_panstripe_fits.png", width = 10, height = 7)
-```
-
-
 
 ```{r}
 or_data$invasive <- (or_data$pvalue<0.05) & (log(or_data$logOR)>0)

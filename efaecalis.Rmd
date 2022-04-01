@@ -79,7 +79,7 @@ ggsave('./figures/efaecalis_pangenome_accumulation_curves.pdf', width=12, height
 ```
 
 ```{r}
-plot_pangenome_fits(fits, type = 'cumulative', include_data = TRUE, facet = TRUE) +
+plot_pangenome_fits(fits, include_data = TRUE, facet = TRUE) +
   theme_clean(base_size = 20) +
   theme(plot.background = element_blank(),
         legend.background = element_blank(),

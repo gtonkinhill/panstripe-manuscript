@@ -32,7 +32,7 @@ set.seed(123)
 
 error_rates <- c(1, 2, 5, 10)
 names(error_rates) <- as.character(error_rates)
-gl_rates <- c(0, 1e-4, 1e-3, 1e-2)
+gl_rates <- c(1e-4, 5e-4, 1e-3, 1e-2)
 nreps <- 5
 
 params <- expand.grid(error_rates, gl_rates, 1:nreps) %>% as_tibble()

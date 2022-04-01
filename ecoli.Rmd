@@ -82,7 +82,7 @@ ggsave('./figures/ecoli_accumulation_curves.pdf', width = 12, height = 7)
 If we instead plot the panstripe curves we can see that clade B appears to be quite different to the other clades and actually has lower rates of gene gain and loss. This makes sense given it is older and fits with the gain and loss of resistance described in Gladstone et al., 2020.
 
 ```{r}
-plot_pangenome_fits(fits, include_data = TRUE, type = 'individual', trim = FALSE, facet = TRUE)
+plot_pangenome_fits(fits, include_data = TRUE, trim = FALSE, facet = TRUE)
 ```
 
 We can confirm this difference by performing pairwise comparisons between the slopes of fitted models. This can be done both for the association with the core branch length and with the tips of the phylogeny. Significant associations with the tips are likely to be driven by both highly mobile elements that do not persist long enough to be observed more than once as well as the effects of annotation errors.
@@ -143,27 +143,18 @@ combined_fits <- c(fits, efits)
 ```
 
 ```{r}
-
-gg1 <- plot_pangenome_fits(fits, type='cumulative', include_data = TRUE, trim = TRUE, facet = TRUE, color_pallete = 6, text_size = 20) + 
-  scale_y_continuous(limits = c(0,1000)) +
-  scale_x_continuous(limits = c(0,20))
-gg2 <- plot_pangenome_fits(efits, type='cumulative', include_data = TRUE, trim = TRUE, facet = TRUE, color_pallete = 1, text_size = 20) + 
-  scale_y_continuous(limits = c(0,1000)) +
-  scale_x_continuous(limits = c(0,20))
-
-gg1 + gg2 + patchwork::plot_layout(nrow = 1, guides = 'collect')
-
-pdf <- plot_pangenome_fits(combined_fits, type='cumulative', include_data = TRUE, trim = TRUE, facet = TRUE, plot = FALSE)
+pdf <- plot_pangenome_fits(combined_fits, include_data = TRUE, trim = TRUE, facet = TRUE, plot = FALSE)
 pdf$point_data$species <- ifelse(grepl('pp.*', pdf$point_data$pangenome), "E. faecalis", "E. coli")
 pdf$fit_data$species <- ifelse(grepl('pp.*', pdf$fit_data$pangenome), "E. faecalis", "E. coli")
 
+cvals <- c('#a6cee3','#fdbf6f','#b2df8a','#fb9a99','#33a02c','#e31a1c','#1f78b4')
 ggplot2::ggplot(pdf$fit_data, ggplot2::aes(x=.data$core, y=.data$acc, colour=.data$pangenome)) + 
   ggplot2::geom_point(data = pdf$point_data, ggplot2::aes(y=.data$acc, colour=.data$pangenome), alpha=1)+
   ggplot2::geom_line() +
   ggplot2::geom_ribbon(ggplot2::aes(ymin=.data$lower, ymax=.data$upper, fill=.data$pangenome), alpha=0.3) +
   facet_grid(pangenome~species) + 
-  ggplot2::scale_colour_brewer(type = 'qual', palette = 3) +
-  ggplot2::scale_fill_brewer(type = 'qual', palette = 3) +
+  ggplot2::scale_colour_manual(values = cvals) +
+  ggplot2::scale_fill_manual(values = cvals) +
   theme_clean(base_size = 20) +
   theme(plot.background = element_blank(),
         legend.background = element_blank(),

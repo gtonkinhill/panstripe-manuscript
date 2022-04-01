@@ -53,7 +53,7 @@ res_roary <- panstripe(rpa, tree)
 ```
 
 ```{r}
-plot_pangenome_fits(list(panaroo=res_panaroo, roary=res_roary), type = 'individual', include_data = TRUE) +
+plot_pangenome_fits(list(panaroo=res_panaroo, roary=res_roary), include_data = TRUE) +
   theme_clean(base_size = 20) +
   theme(plot.background = element_blank(),
         legend.background = element_blank(),
