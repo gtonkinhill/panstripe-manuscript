@@ -54,12 +54,16 @@ set up input data
 ```{r, message=FALSE, echo = TRUE, results = 'hide'}
 imap(sim_error, function (rep, i) {
   imap(rep, ~{
+    ngens <- max(ape::node.depth.edgelength(.x$tree))
     ape::write.tree(.x$tree, 
                   file = paste(c("./data/error_rates/panicmage/error_rate_", .y,'_rep_',i, '.tree'), 
                                collapse = ''))
     gc <- table(factor(colSums(.x$pa), levels = 1:nrow(.x$pa)))
     writeLines(paste(gc, collapse = ' '), 
                paste(c("./data/error_rates/panicmage/error_rate_", .y,'_rep_',i, '.txt'), 
+                               collapse = ''))
+    writeLines(as.character(ngens), 
+               paste(c("./data/error_rates/panicmage/error_rate_", .y,'_rep_',i, '.ngen'), 
                                collapse = ''))
   })
 })
@@ -71,8 +75,11 @@ run panicmage
 for f in ./data/error_rates/panicmage/*.tree
 do
 prefix="${f%.*}"
+ngen=$(head -n 1 ${prefix}.ngen)
 echo $prefix
-~/Documents/panicmage/panicmage ${prefix}.tree ${prefix}.txt 100 -n > ${prefix}_results.txt
+echo $ngen
+echo ~/Documents/panicmage/panicmage ${prefix}.tree ${prefix}.txt 100 -n -g $ngen \> ${prefix}_results.txt
+~/Documents/panicmage/panicmage ${prefix}.tree ${prefix}.txt 100 -n -g $ngen > ${prefix}_results.txt
 done
 ```
 
@@ -85,19 +92,22 @@ panicmage_results <- map_dfr(resfiles, ~{
   l <- read_lines(.x)  
   i <- which(grepl('Some characteristics.*',l))
   params <- as.numeric(gsub('.*= ', '', unlist(str_split(l[[i+1]], ' \t '))))
+  i <- which(grepl('per generation rate of gene gain:.*', l))
+  a <- as.numeric(gsub(' \\* 10\\^', 'e', str_split(l[[i]], '\t\t ')[[1]][[2]]))
   tibble(
     error_rate = gsub('_rep.*', '', gsub('.*rate_','',.x)),
     rep = gsub('_results.*', '', gsub('.*rep_','',.x)),
     theta = params[[1]],
-    tho = params[[2]],
-    core = params[[3]]
+    rho = params[[2]],
+    core = params[[3]],
+    a=a
   )
 })
 
 
 
 pdf <- panicmage_results %>% 
-  pivot_longer(cols = colnames(panicmage_results)[3:5])
+  pivot_longer(cols = colnames(panicmage_results)[3:6])
 pdf$error_rate <- factor(pdf$error_rate, levels = sort(unique(as.numeric(pdf$error_rate))))
 
 ggplot(pdf, aes(x=error_rate, y=value)) +
@@ -190,55 +200,6 @@ Plot parameter estimates
 ggplot(pdf, aes(x=error_rate, y=value)) +
   geom_point() +
   facet_wrap(~name, scales = 'free_y')
-```
-
-
-#### CAFE
-
-CAFE was originally designed for analysing the rates of gain and loss in gene families and is not currently optimised for investigating the size of the bacterial pangenome. However, it is the only model considered that accounts for annotation errors. In this analysis we assume that all genes belong to a single 'family'. 
-
-We provide the error file using the same distribution as was used in the original simulation.
-
-```{r}
-# imap(sim_error, function (rep, i) {
-#   imap(rep, ~{
-#     ape::write.tree(.x$tree, 
-#                   file = paste(c("./data/error_rates/CAFE/error_rate_", .y,'_rep_',i, '.tree'), 
-#                                collapse = ''))
-#     gc <- rowSums(.x$pa)
-#     writeLines(c(paste(c('Desc', 'Family ID', names(gc)), collapse = '\t'),
-#                  paste(c('NA', 'allD', gc), collapse = '\t')), 
-#                paste(c("./data/error_rates/CAFE/error_rate_", .y,'_rep_',i, '_gene_families.txt'), 
-#                                collapse = ''))
-#   })
-# })
-```
-
-Generate error files.
-
-```{r}
-# max_genes <- ceiling(1.2*max(map_dbl(sim_error, ~ max(map_dbl(.x, function(r) ncol(r$pa))))))
-# 
-# map(rates, ~{
-#   p <- dexp(x=1, rate = 1/.x)
-#   error_tbl <- tibble(
-#     'cntdiff'=0:max_genes,
-#     '-1'=c(0, rep(p, max_genes)),
-#     '0'= c(1-p, rep(1-2*p, max_genes)),
-#     '1'= rep(p, max_genes+1)
-#   )
-#   file <- paste(c("./data/error_rates/CAFE/error_model_rate_", .x,'.txt'), 
-#                                collapse = '')
-#   writeLines(paste0('maxcnt:', max_genes), 
-#                file)
-#   write.table(error_tbl, file = file, append = TRUE, quote = FALSE, sep = ' ', row.names = FALSE)
-# })
-```
-
-Run CAFE
-
-```
-~/Documents/CAFE5-5.0/bin/cafe5 -i ./data/error_rates/CAFE/error_rate_10_rep_1_gene_families.txt -t ./data/error_rates/CAFE/error_rate_10_rep_1.tree -e./data/error_rates/CAFE/error_model_rate_10.txt
 ```
 
 
@@ -415,8 +376,8 @@ ggplot(pp_results, aes(x=error_rate, y=estimate, col=rep)) +
 ```{r}
 # panicmage
 pannic_res <- panicmage_results %>% 
-  pivot_longer(cols = colnames(panicmage_results)[3:5]) %>%
-  filter(name=='theta')
+  pivot_longer(cols = colnames(panicmage_results)[3:6]) %>%
+  filter(name=='a')
 pannic_res$value <- c(scale(pannic_res$value, scale=FALSE, center=FALSE))
 
 pannic_test <- do.call(rbind, pannic_res %>% 

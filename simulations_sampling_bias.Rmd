@@ -70,12 +70,16 @@ set up input data
 ```{r, message=FALSE, echo = TRUE, results = 'hide'}
 imap(sim_bias, function (rep, i) {
   imap(rep, ~{
+    ngens <- max(ape::node.depth.edgelength(.x$tree))
     ape::write.tree(.x$tree, 
                   file = paste(c("./data/sampling_bias/panicmage/", nrow(.x$pa), "_bias_", .y,'_rep_',i, '.tree'), 
                                collapse = ''))
     gc <- table(factor(colSums(.x$pa), levels = 1:nrow(.x$pa)))
     writeLines(paste(gc, collapse = ' '), 
                paste(c("./data/sampling_bias/panicmage/", nrow(.x$pa), "_bias_", .y,'_rep_',i, '.txt'), 
+                               collapse = ''))
+    writeLines(as.character(ngens), 
+               paste(c("./data/sampling_bias/panicmage/", nrow(.x$pa), "_bias_", .y,'_rep_',i, '.ngen'), 
                                collapse = ''))
   })
 })
@@ -89,8 +93,10 @@ do
 prefix="${f%.*}"
 num=$(basename $f)
 num="$(cut -d'_' -f1 <<<"$num")"
+ngen=$(head -n 1 ${prefix}.ngen)
 echo $prefix
-~/Documents/panicmage/panicmage ${prefix}.tree ${prefix}.txt $num -n > ${prefix}_results.txt
+echo ~/Documents/panicmage/panicmage ${prefix}.tree ${prefix}.txt $num -n -g $ngen \> ${prefix}_results.txt
+~/Documents/panicmage/panicmage ${prefix}.tree ${prefix}.txt $num -n -g $ngen > ${prefix}_results.txt
 done
 ```
 
@@ -104,19 +110,20 @@ panicmage_results <- map_dfr(resfiles, ~{
   l <- read_lines(.x)  
   i <- which(grepl('Some characteristics.*',l))
   params <- as.numeric(gsub('.*= ', '', unlist(str_split(l[[i+1]], ' \t '))))
+  i <- which(grepl('per generation rate of gene gain:.*', l))
+  a <- as.numeric(gsub(' \\* 10\\^', 'e', str_split(l[[i]], '\t\t ')[[1]][[2]]))
   tibble(
     set = gsub('_rep.*', '', gsub('.*bias_','',.x)),
     rep = gsub('_results.*', '', gsub('.*rep_','',.x)),
     theta = params[[1]],
     tho = params[[2]],
-    core = params[[3]]
+    core = params[[3]],
+    a=a
   )
 })
 
-
-
 pdf <- panicmage_results %>% 
-  pivot_longer(cols = colnames(panicmage_results)[3:5])
+  pivot_longer(cols = colnames(panicmage_results)[3:6])
 
 ggplot(pdf, aes(x=set, y=value)) +
   geom_point() +
@@ -374,8 +381,8 @@ ggplot(pp_results, aes(x=set, y=estimate, col=rep)) +
 ```{r}
 # panicmage
 pannic_res <- panicmage_results %>% 
-  pivot_longer(cols = colnames(panicmage_results)[3:5]) %>%
-  filter(name=='theta')
+  pivot_longer(cols = colnames(panicmage_results)[3:6]) %>%
+  filter(name=='a')
 pannic_res$value <- c(pannic_res$value)
 pannic_test <- t.test(pannic_res$value[pannic_res$set=='full'],
         pannic_res$value[pannic_res$set=='subset'], 
